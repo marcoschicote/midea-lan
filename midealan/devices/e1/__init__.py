@@ -225,6 +225,9 @@ class MideaE1Device(MideaDevice):
 
         """
         self._check_mode(mode)
+        if mode == 0:
+            msg = "[e1] No work mode selected"
+            raise ValueWrongType(msg)
         if not 0 < minutes <= MAX_DELAY_MINUTES:
             msg = f"[e1] Delay must be 1 to {MAX_DELAY_MINUTES} minutes: {minutes}"
             raise ValueWrongType(msg)

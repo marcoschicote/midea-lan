@@ -117,6 +117,11 @@ class TestMideaE1Device:
         with pytest.raises(ValueWrongType, match="Unsupported work mode"):
             self.device.set_delayed_start(0x11, 60)
 
+    def test_set_delayed_start_rejects_neutral_mode(self) -> None:
+        """Test a delayed start needs a work mode."""
+        with pytest.raises(ValueWrongType, match="No work mode selected"):
+            self.device.set_delayed_start(0x00, 60)
+
     def test_cancel_delayed_start(self) -> None:
         """Test cancelling a delayed start."""
         self.device._attributes[DeviceAttributes.mode] = "eco_wash"

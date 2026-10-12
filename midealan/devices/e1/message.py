@@ -20,6 +20,16 @@ WORK_STATUS_ORDER = 0x02
 WORK_STATUS_WORK = 0x03
 WORK_STATUS_CANCEL_ORDER = 0x04
 
+# Work command offsets, after the body type byte
+WORK_DELAY_HOURS_INDEX = 6
+WORK_DELAY_MINUTES_INDEX = 7
+WORK_DOOR_AUTO_OPEN_INDEX = 12
+
+# Status reply offsets and flags
+DOOR_AUTO_OPEN_FLAG = 0x40
+DELAY_HOURS_BYTE = 7
+DELAY_MINUTES_BYTE = 8
+
 
 class MessageE1Base(MessageRequest):
     """E1 message base."""
@@ -87,8 +97,11 @@ class MessageWork(MessageE1Base):
         body[0] = self.work_status
         body[1] = self.mode
         if self.work_status == WORK_STATUS_ORDER:
-            body[6], body[7] = divmod(self.delay_minutes, 60)
-        body[12] = 0x01 if self.door_auto_open else 0x00
+            (
+                body[WORK_DELAY_HOURS_INDEX],
+                body[WORK_DELAY_MINUTES_INDEX],
+            ) = divmod(self.delay_minutes, 60)
+        body[WORK_DOOR_AUTO_OPEN_INDEX] = 0x01 if self.door_auto_open else 0x00
         return body
 
 
@@ -171,10 +184,12 @@ class E1GeneralMessageBody(MessageBody):
         self.diyflag = (body[4] & 0x08) > 0
         self.child_lock = (body[5] & 0x10) > 0
         self.uv = (body[4] & 0x2) > 0
-        self.door_auto_open = (body[4] & 0x40) > 0
+        self.door_auto_open = (body[4] & DOOR_AUTO_OPEN_FLAG) > 0
         # Delay left until a delayed start, only meaningful in status Delay
         self.delay_remaining = (
-            body[7] * 60 + body[8] if self.status == WORK_STATUS_ORDER else 0
+            body[DELAY_HOURS_BYTE] * 60 + body[DELAY_MINUTES_BYTE]
+            if self.status == WORK_STATUS_ORDER
+            else 0
         )
         self.dry = (body[4] & 0x10) > 0
         self.dry_status = (body[4] & 0x20) > 0
