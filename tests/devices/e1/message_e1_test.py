@@ -16,13 +16,52 @@ from midealan.devices.e1.message import (
 from midealan.message import ListTypes, MessageType
 
 
+def _hex_body(prefix: str) -> bytearray:
+    """Return a 38-byte body from a hex prefix, zero-padded."""
+    return bytearray.fromhex(prefix.ljust(76, "0"))
+
+
 def test_work_message_body() -> None:
     """Test work message body."""
     message = MessageWork(ProtocolVersion.V1)
-    assert message.body == bytearray([0x08, 0x03, 0x00, 0x00, 0x00])
+    assert message.body == _hex_body("0803")
 
     message.mode = 0x04
-    assert message.body == bytearray([0x08, 0x03, 0x04, 0x00, 0x00])
+    assert message.body == _hex_body("080304")
+
+
+# Bodies verified on a 76000228 dishwasher (E1, protocol 3).
+@pytest.mark.parametrize(
+    ("work_status", "delay_minutes", "door_auto_open", "expected"),
+    [
+        (0x03, 0, True, "0803040000000000000000000001"),
+        (0x01, 0, False, "080104"),
+        (0x02, 60, True, "0802040000000001000000000001"),
+        (0x02, 3 * 60 + 34, False, "0802040000000003220000000000"),
+        (0x04, 0, False, "080404"),
+    ],
+)
+def test_work_message_verified_bodies(
+    work_status: int,
+    delay_minutes: int,
+    door_auto_open: bool,
+    expected: str,
+) -> None:
+    """Test work message bodies for cancel, delayed start and door auto-open."""
+    message = MessageWork(ProtocolVersion.V1)
+    message.work_status = work_status
+    message.mode = 0x04
+    message.delay_minutes = delay_minutes
+    message.door_auto_open = door_auto_open
+    assert message.body == _hex_body(expected)
+
+
+def test_work_message_ignores_delay_unless_ordering() -> None:
+    """Test the delay bytes are only sent with a delayed start."""
+    message = MessageWork(ProtocolVersion.V1)
+    message.mode = 0x04
+    message.delay_minutes = 60
+    assert message.body == _hex_body("080304")
 
 
 class TestMessageE1Base:
@@ -92,7 +131,7 @@ class TestE1GeneralMessageBody:
         body[1] = 0x03  # power on, status Running
         body[2] = 0x04  # mode
         body[3] = 0x05  # additional
-        body[4] = 0x3F  # diyflag, uv/uv_switch, dry, dry_status, waterswitch, ...
+        body[4] = 0x7F  # diyflag, uv/uv_switch, dry, door_auto_open, ...
         body[5] = 0xFE  # door closed + all other switch/status bits set
         body[6] = 45  # time_remaining (low byte)
         body[9] = 0x03  # progress
@@ -132,6 +171,8 @@ class TestE1GeneralMessageBody:
         assert result.dry_status is True
         assert result.waterswitch is True
         assert result.dry_step_switch is True
+        assert result.door_auto_open is True
+        assert result.delay_remaining == 0  # only set in status Delay
         assert result.time_remaining == 1 * 256 + 45
         assert result.progress == 0x03
         assert result.storage_set_time == 4
@@ -166,6 +207,19 @@ class TestE1GeneralMessageBody:
         result = E1GeneralMessageBody(body)
 
         assert result.start is False
+
+    def test_delay_remaining_in_status_delay(self) -> None:
+        """Test the delay left is parsed from bytes 7-8 in status Delay."""
+        body = bytearray(40)
+        body[1] = 0x02  # status Delay
+        body[4] = 0x40  # door auto-open set
+        body[7] = 0  # hours left
+        body[8] = 59  # minutes left
+
+        result = E1GeneralMessageBody(body)
+
+        assert result.delay_remaining == 59
+        assert result.door_auto_open is True
 
 
 class TestMessageE1Response:

@@ -75,6 +75,58 @@ class TestMideaE1Device:
         assert isinstance(message, MessageWork)
         assert message.mode == 0x04
 
+    def test_start_work_door_auto_open(self) -> None:
+        """Test starting with door auto-open."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.start_work(door_auto_open=True)
+
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.door_auto_open is True
+
+    def test_cancel_work(self) -> None:
+        """Test cancelling the running program keeps the current mode."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.cancel_work()
+
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.body == bytearray.fromhex("080104".ljust(76, "0"))
+
+    def test_set_delayed_start(self) -> None:
+        """Test a delayed start sends status order with the delay."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_delayed_start(0x04, 60, door_auto_open=True)
+
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.body == bytearray.fromhex(
+            "0802040000000001000000000001".ljust(76, "0"),
+        )
+
+    @pytest.mark.parametrize("minutes", [0, -1, 24 * 60 + 1])
+    def test_set_delayed_start_rejects_delay(self, minutes: int) -> None:
+        """Test a delayed start rejects out of range delays."""
+        with pytest.raises(ValueWrongType, match="Delay must be"):
+            self.device.set_delayed_start(0x04, minutes)
+
+    def test_set_delayed_start_rejects_unknown_mode(self) -> None:
+        """Test a delayed start rejects an unknown work mode."""
+        with pytest.raises(ValueWrongType, match="Unsupported work mode"):
+            self.device.set_delayed_start(0x11, 60)
+
+    def test_cancel_delayed_start(self) -> None:
+        """Test cancelling a delayed start."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.cancel_delayed_start()
+
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.body == bytearray.fromhex("080404".ljust(76, "0"))
+
     @pytest.mark.parametrize("mode", [None, 0, "neutral_gear"])
     def test_start_work_requires_selected_mode(self, mode: str | int | None) -> None:
         """Test starting requires a non-neutral selected mode."""

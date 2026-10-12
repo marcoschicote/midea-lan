@@ -9,6 +9,9 @@ from midealan.device import MideaDevice, MideaDeviceInitKwargs
 from midealan.exceptions import ValueWrongType
 
 from .message import (
+    WORK_STATUS_CANCEL,
+    WORK_STATUS_CANCEL_ORDER,
+    WORK_STATUS_ORDER,
     MessageE1Response,
     MessageLock,
     MessagePower,
@@ -18,6 +21,8 @@ from .message import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+MAX_DELAY_MINUTES = 24 * 60
 
 
 class DeviceAttributes(StrEnum):
@@ -47,6 +52,8 @@ class DeviceAttributes(StrEnum):
     softwater = "softwater"
     wrong_operation = "wrong_operation"
     bright = "bright"
+    door_auto_open = "door_auto_open"
+    delay_remaining = "delay_remaining"
 
 
 class MideaE1Device(MideaDevice):
@@ -87,6 +94,8 @@ class MideaE1Device(MideaDevice):
                 DeviceAttributes.softwater: 0,
                 DeviceAttributes.wrong_operation: None,
                 DeviceAttributes.bright: 0,
+                DeviceAttributes.door_auto_open: False,
+                DeviceAttributes.delay_remaining: 0,
             },
         )
         self._modes = {
@@ -138,7 +147,20 @@ class MideaE1Device(MideaDevice):
         """Midea E1 device build query."""
         return [MessageQuery(self._message_protocol_version)]
 
-    def set_work_mode(self, mode: int) -> None:
+    def _check_mode(self, mode: int) -> None:
+        if mode not in self._modes:
+            msg = f"[e1] Unsupported work mode: {mode}"
+            raise ValueWrongType(msg)
+
+    def _current_mode(self) -> int:
+        """Return the code of the current work mode, 0 if unknown."""
+        mode_name = self.get_attribute(DeviceAttributes.mode)
+        return next(
+            (code for code, name in self._modes.items() if name == mode_name),
+            0,
+        )
+
+    def set_work_mode(self, mode: int, *, door_auto_open: bool = False) -> None:
         """Set the dishwasher work mode and start the selected program.
 
         Raises
@@ -147,15 +169,13 @@ class MideaE1Device(MideaDevice):
             If the mode code is not supported.
 
         """
-        if mode not in self._modes:
-            msg = f"[e1] Unsupported work mode: {mode}"
-            raise ValueWrongType(msg)
-
+        self._check_mode(mode)
         message = MessageWork(self._message_protocol_version)
         message.mode = mode
+        message.door_auto_open = door_auto_open
         self.build_send(message)
 
-    def start_work(self) -> None:
+    def start_work(self, *, door_auto_open: bool = False) -> None:
         """Start the dishwasher using its currently selected work mode.
 
         Raises
@@ -173,14 +193,54 @@ class MideaE1Device(MideaDevice):
             msg = "[e1] Invalid work mode"
             raise ValueWrongType(msg)
 
-        mode = next(
-            (code for code, name in self._modes.items() if name == mode_name),
-            None,
-        )
-        if mode is None or mode == 0:
+        mode = self._current_mode()
+        if mode == 0:
             msg = "[e1] No work mode selected"
             raise ValueWrongType(msg)
-        self.set_work_mode(mode)
+        self.set_work_mode(mode, door_auto_open=door_auto_open)
+
+    def cancel_work(self) -> None:
+        """Cancel the running program, leaving the dishwasher on.
+
+        A plain power off is ignored by some models while a program runs.
+        """
+        message = MessageWork(self._message_protocol_version)
+        message.work_status = WORK_STATUS_CANCEL
+        message.mode = self._current_mode()
+        self.build_send(message)
+
+    def set_delayed_start(
+        self,
+        mode: int,
+        minutes: int,
+        *,
+        door_auto_open: bool = False,
+    ) -> None:
+        """Start the given work mode after a delay in minutes.
+
+        Raises
+        ------
+        ValueWrongType
+            If the mode code is not supported or the delay is out of range.
+
+        """
+        self._check_mode(mode)
+        if not 0 < minutes <= MAX_DELAY_MINUTES:
+            msg = f"[e1] Delay must be 1 to {MAX_DELAY_MINUTES} minutes: {minutes}"
+            raise ValueWrongType(msg)
+        message = MessageWork(self._message_protocol_version)
+        message.work_status = WORK_STATUS_ORDER
+        message.mode = mode
+        message.delay_minutes = minutes
+        message.door_auto_open = door_auto_open
+        self.build_send(message)
+
+    def cancel_delayed_start(self) -> None:
+        """Cancel a pending delayed start."""
+        message = MessageWork(self._message_protocol_version)
+        message.work_status = WORK_STATUS_CANCEL_ORDER
+        message.mode = self._current_mode()
+        self.build_send(message)
 
     def process_message(self, msg: bytes) -> dict[str, Any]:
         """Midea E1 device process message."""

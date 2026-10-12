@@ -12,6 +12,13 @@ from midealan.message import (
 BRIGTH_BYTE = 24
 STORAGE_REMAINING_BYTE = 18
 HUMIDITY_BYTE = 33
+CONTROL_BODY_LENGTH = 37  # 38 bytes with the body type, as in Midea's Lua
+
+WORK_STATUS_POWER_OFF = 0x00
+WORK_STATUS_CANCEL = 0x01
+WORK_STATUS_ORDER = 0x02
+WORK_STATUS_WORK = 0x03
+WORK_STATUS_CANCEL_ORDER = 0x04
 
 
 class MessageE1Base(MessageRequest):
@@ -55,7 +62,12 @@ class MessagePower(MessageE1Base):
 
 
 class MessageWork(MessageE1Base):
-    """E1 message work."""
+    """E1 message work.
+
+    Layout from Midea's T_0000_E1_7600002B_2024042301.lua: byte 1 work status,
+    byte 2 mode, bytes 7-8 delay (hours, minutes) when ordering, byte 13 door
+    auto-open.
+    """
 
     def __init__(self, protocol_version: int) -> None:
         """Initialize E1 message work."""
@@ -64,12 +76,20 @@ class MessageWork(MessageE1Base):
             message_type=MessageType.set,
             body_type=ListTypes.X08,
         )
-        self.work_status = 0x3
+        self.work_status = WORK_STATUS_WORK
         self.mode = 0
+        self.delay_minutes = 0
+        self.door_auto_open = False
 
     @property
     def _body(self) -> bytearray:
-        return bytearray([self.work_status, self.mode, 0x00, 0x00])
+        body = bytearray(CONTROL_BODY_LENGTH)
+        body[0] = self.work_status
+        body[1] = self.mode
+        if self.work_status == WORK_STATUS_ORDER:
+            body[6], body[7] = divmod(self.delay_minutes, 60)
+        body[12] = 0x01 if self.door_auto_open else 0x00
+        return body
 
 
 class MessageLock(MessageE1Base):
@@ -151,6 +171,11 @@ class E1GeneralMessageBody(MessageBody):
         self.diyflag = (body[4] & 0x08) > 0
         self.child_lock = (body[5] & 0x10) > 0
         self.uv = (body[4] & 0x2) > 0
+        self.door_auto_open = (body[4] & 0x40) > 0
+        # Delay left until a delayed start, only meaningful in status Delay
+        self.delay_remaining = (
+            body[7] * 60 + body[8] if self.status == WORK_STATUS_ORDER else 0
+        )
         self.dry = (body[4] & 0x10) > 0
         self.dry_status = (body[4] & 0x20) > 0
         self.storage = (body[5] & 0x20) > 0  # airswitch
