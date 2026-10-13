@@ -2,11 +2,14 @@
 
 import logging
 from enum import StrEnum
-from typing import Any, Unpack, cast
+from typing import TYPE_CHECKING, Any, Unpack, cast
 
 from midealan.const import DeviceType
 from midealan.device import MideaDevice, MideaDeviceInitKwargs
 from midealan.exceptions import ValueWrongType
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from .message import (
     WORK_STATUS_CANCEL,
@@ -197,7 +200,14 @@ class MideaE1Device(MideaDevice):
             0x04: "error",
             0x05: "soft_gear",
         }
-        self._progress = ["idle", "pre_wash", "wash", "rinse", "dry", "complete"]
+        self._progress = {
+            0x00: "idle",
+            0x01: "pre_wash",
+            0x02: "wash",
+            0x03: "rinse",
+            0x04: "dry",
+            0x05: "complete",
+        }
         # Door auto-open to send with the next work/order command. Kept apart
         # from the door_auto_open attribute, which status replies overwrite.
         self._door_auto_open_setting = False
@@ -411,10 +421,7 @@ class MideaE1Device(MideaDevice):
                 if status == DeviceAttributes.status:
                     self._attributes[status] = self._status.get(value)
                 elif status == DeviceAttributes.progress:
-                    if value < len(self._progress):
-                        self._attributes[status] = self._progress[value]
-                    else:
-                        self._attributes[status] = None
+                    self._attributes[status] = self._progress.get(value)
                 elif status == DeviceAttributes.mode:
                     self._attributes[status] = self._modes.get(value)
                 else:
@@ -435,28 +442,36 @@ class MideaE1Device(MideaDevice):
         """Return the door auto-open setting for the next command."""
         return self._door_auto_open_setting
 
+    def _start_delayed(self) -> None:
+        """Start a delayed program from the stored mode and delay."""
+        self.set_delayed_start(
+            self._current_mode(),
+            self._stored_delay_minutes(),
+            door_auto_open=self._stored_door_auto_open(),
+        )
+
     def _set_status(self, value: str) -> None:
         """Issue a work command from a status trigger write."""
-        door_auto_open = self._stored_door_auto_open()
-        if value in (STATUS_WORK, STATUS_RUNNING):
-            self.start_work(door_auto_open=door_auto_open)
-        elif value == STATUS_CANCEL:
-            self.cancel_work()
-        elif value in (STATUS_ORDER, STATUS_DELAY):
-            self.set_delayed_start(
-                self._current_mode(),
-                self._stored_delay_minutes(),
-                door_auto_open=door_auto_open,
-            )
-        elif value == STATUS_CANCEL_ORDER:
-            self.cancel_delayed_start()
-        elif value == STATUS_PAUSE:
-            self.pause_work()
-        elif value in (STATUS_RESUME, STATUS_START):
-            self.resume_work()
-        else:
+        actions: dict[str, Callable[[], None]] = {
+            STATUS_WORK: lambda: self.start_work(
+                door_auto_open=self._stored_door_auto_open(),
+            ),
+            STATUS_RUNNING: lambda: self.start_work(
+                door_auto_open=self._stored_door_auto_open(),
+            ),
+            STATUS_CANCEL: self.cancel_work,
+            STATUS_ORDER: self._start_delayed,
+            STATUS_DELAY: self._start_delayed,
+            STATUS_CANCEL_ORDER: self.cancel_delayed_start,
+            STATUS_PAUSE: self.pause_work,
+            STATUS_RESUME: self.resume_work,
+            STATUS_START: self.resume_work,
+        }
+        action = actions.get(value)
+        if action is None:
             msg = f"[e1] Unsupported status: {value}"
             raise ValueWrongType(msg)
+        action()
 
     def set_attribute(self, attr: str, value: bool | float | str) -> None:
         """Midea E1 device set attribute.
