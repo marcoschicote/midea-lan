@@ -160,7 +160,7 @@ class MessageLock(MessageE1Base):
     @property
     def _body(self) -> bytearray:
         lock = LOCK_ON if self.lock else LOCK_OFF
-        return bytearray([lock]) + bytearray([0x00] * 36)
+        return bytearray([lock]) + bytearray(CONTROL_BODY_LENGTH - 1)
 
 
 class MessageOperator(MessageE1Base):
@@ -182,7 +182,7 @@ class MessageOperator(MessageE1Base):
     @property
     def _body(self) -> bytearray:
         operator = OPERATOR_PAUSE if self.pause else OPERATOR_START
-        return bytearray([operator]) + bytearray([0x00] * 36)
+        return bytearray([operator]) + bytearray(CONTROL_BODY_LENGTH - 1)
 
 
 class MessageStorage(MessageE1Base):
