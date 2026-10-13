@@ -56,6 +56,22 @@ class DeviceAttributes(StrEnum):
     door_auto_open = "door_auto_open"
     delay_remaining = "delay_remaining"
     delay_minutes = "delay_minutes"
+    # Sensors (read-only), decoded from the status reply
+    operator = "operator"
+    wash_region = "wash_region"
+    water_level = "water_level"
+    water_strong_level = "water_strong_level"
+    dry_set_min = "dry_set_min"
+    clean_left_hour = "clean_left_hour"
+    kitchenware_left_hour = "kitchenware_left_hour"
+    device_version = "device_version"
+    wifi_unabled = "wifi_unabled"
+    auto_throw = "auto_throw"
+    throw_percent = "throw_percent"
+    lock_power = "lock_power"
+    beep_control = "beep_control"
+    light_btn_on = "light_btn_on"
+    light_strip_on = "light_strip_on"
 
 
 # Work-command triggers accepted through set_attribute("status", ...). The keys
@@ -67,6 +83,17 @@ STATUS_CANCEL = "cancel"
 STATUS_ORDER = "order"
 STATUS_DELAY = "delay"
 STATUS_CANCEL_ORDER = "cancel_order"
+
+# Single-byte wash parameters stored and sent with the next work command.
+MAX_BYTE_VALUE = 0xFF
+_WASH_PARAM_ATTRS = frozenset(
+    {
+        DeviceAttributes.additional,
+        DeviceAttributes.wash_region,
+        DeviceAttributes.water_level,
+        DeviceAttributes.water_strong_level,
+    },
+)
 
 
 class MideaE1Device(MideaDevice):
@@ -110,6 +137,21 @@ class MideaE1Device(MideaDevice):
                 DeviceAttributes.door_auto_open: False,
                 DeviceAttributes.delay_remaining: 0,
                 DeviceAttributes.delay_minutes: 0,
+                DeviceAttributes.operator: None,
+                DeviceAttributes.wash_region: 0,
+                DeviceAttributes.water_level: None,
+                DeviceAttributes.water_strong_level: None,
+                DeviceAttributes.dry_set_min: None,
+                DeviceAttributes.clean_left_hour: None,
+                DeviceAttributes.kitchenware_left_hour: None,
+                DeviceAttributes.device_version: None,
+                DeviceAttributes.wifi_unabled: None,
+                DeviceAttributes.auto_throw: None,
+                DeviceAttributes.throw_percent: None,
+                DeviceAttributes.lock_power: None,
+                DeviceAttributes.beep_control: None,
+                DeviceAttributes.light_btn_on: None,
+                DeviceAttributes.light_strip_on: None,
             },
         )
         self._modes = {
@@ -148,6 +190,12 @@ class MideaE1Device(MideaDevice):
         # Door auto-open to send with the next work/order command. Kept apart
         # from the door_auto_open attribute, which status replies overwrite.
         self._door_auto_open_setting = False
+        # Wash parameters to send with the next work/order command. Kept apart
+        # from their reported attributes, which status replies overwrite.
+        self._wash_param_settings: dict[DeviceAttributes, int] = dict.fromkeys(
+            _WASH_PARAM_ATTRS,
+            0,
+        )
 
     @property
     def modes(self) -> dict[int, str]:
@@ -199,6 +247,16 @@ class MideaE1Device(MideaDevice):
             msg = f"[e1] Delay must be 1 to {MAX_DELAY_MINUTES} minutes: {minutes}"
             raise ValueWrongType(msg)
 
+    def _check_byte(self, attr: str, value: object) -> int:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= MAX_BYTE_VALUE
+        ):
+            msg = f"[e1] {attr} must be 0 to {MAX_BYTE_VALUE}: {value}"
+            raise ValueWrongType(msg)
+        return value
+
     def make_message_set(
         self,
         work_status: int,
@@ -212,6 +270,8 @@ class MideaE1Device(MideaDevice):
         Explicit callers may override ``mode``, ``delay_minutes`` and
         ``door_auto_open``; anything left as ``None`` falls back to the stored
         attribute, so a plain ``set_attribute`` write reuses the device state.
+        The wash parameters (additional, wash_region, water_level,
+        water_strong_level) always ride along from their stored values.
         """
         message = MessageWork(self._message_protocol_version)
         message.work_status = work_status
@@ -222,6 +282,12 @@ class MideaE1Device(MideaDevice):
         message.door_auto_open = (
             self._stored_door_auto_open() if door_auto_open is None else door_auto_open
         )
+        message.additional = self._wash_param_settings[DeviceAttributes.additional]
+        message.wash_region = self._wash_param_settings[DeviceAttributes.wash_region]
+        message.water_level = self._wash_param_settings[DeviceAttributes.water_level]
+        message.water_strong_level = self._wash_param_settings[
+            DeviceAttributes.water_strong_level
+        ]
         return message
 
     def set_work_mode(self, mode: int | str, *, door_auto_open: bool = False) -> None:
@@ -333,10 +399,14 @@ class MideaE1Device(MideaDevice):
                 new_status[str(status)] = self._attributes[status]
         return new_status
 
+    def _stored_int(self, attr: DeviceAttributes) -> int:
+        """Return a stored numeric attribute as int, 0 if unset."""
+        value = self.get_attribute(attr)
+        return int(value) if isinstance(value, (int, bool)) else 0
+
     def _stored_delay_minutes(self) -> int:
         """Return the stored delay in minutes, 0 if unset."""
-        value = self.get_attribute(DeviceAttributes.delay_minutes)
-        return int(value) if isinstance(value, (int, bool)) else 0
+        return self._stored_int(DeviceAttributes.delay_minutes)
 
     def _stored_door_auto_open(self) -> bool:
         """Return the door auto-open setting for the next command."""
@@ -385,6 +455,15 @@ class MideaE1Device(MideaDevice):
             )
             self._check_delay(minutes)
             self._attributes[DeviceAttributes.delay_minutes] = cast("int", minutes)
+            return
+        if attr in _WASH_PARAM_ATTRS:
+            number = (
+                int(value) if isinstance(value, float) and value.is_integer() else value
+            )
+            self._wash_param_settings[DeviceAttributes(attr)] = self._check_byte(
+                attr,
+                number,
+            )
             return
 
         if not isinstance(value, bool):

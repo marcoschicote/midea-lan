@@ -64,6 +64,19 @@ def test_work_message_ignores_delay_unless_ordering() -> None:
     assert message.body == _hex_body("080304")
 
 
+def test_work_message_wash_params() -> None:
+    """Test the wash parameters are placed at the lua work-command offsets."""
+    message = MessageWork(ProtocolVersion.V1)
+    message.mode = 0x04
+    message.additional = 0x05  # body index 3
+    message.wash_region = 0x06  # body index 4
+    message.water_level = 0x02  # body index 11
+    message.water_strong_level = 0x01  # body index 12
+    # 0x08 type, work 0x03, mode 0x04, additional 0x05, wash_region 0x06,
+    # ... water_level at index 11, water_strong_level at index 12
+    assert message.body == _hex_body("08030405060000000000000201")
+
+
 class TestMessageE1Base:
     """Test E1 message base."""
 
@@ -127,7 +140,7 @@ class TestE1GeneralMessageBody:
 
     def test_full_body(self) -> None:
         """Test parsing a full-length body sets every attribute."""
-        body = bytearray(40)
+        body = bytearray(42)
         body[1] = 0x03  # power on, status Running
         body[2] = 0x04  # mode
         body[3] = 0x05  # additional
@@ -142,8 +155,16 @@ class TestE1GeneralMessageBody:
         body[17] = 4  # storage_set_time
         body[18] = 5  # storage_remaining
         body[24] = 9  # bright
+        body[28] = 3  # device_version
+        body[30] = 2  # water_level
+        body[31] = 1  # water_strong_level
         body[32] = 1  # left_time_high
         body[33] = 60  # humidity
+        body[34] = 50  # dry_set_min
+        body[35] = 6  # wash_region
+        body[37] = 0xFC  # all status flags except wifi_unabled off
+        body[40] = 8  # clean_left_hour
+        body[41] = 9  # kitchenware_left_hour
 
         result = E1GeneralMessageBody(body)
 
@@ -183,6 +204,23 @@ class TestE1GeneralMessageBody:
         assert result.softwater == 2
         assert result.wrong_operation == 1
         assert result.bright == 9
+        assert result.operator == "start"
+        assert result.device_version == 3
+        assert result.water_level == 2
+        assert result.water_strong_level == 1
+        assert result.dry_set_min == 50
+        assert result.wash_region == 6
+        assert result.clean_left_hour == 8
+        assert result.kitchenware_left_hour == 9
+        # body[37] = 0xFC -> auto_throw, throw_percent empty, lock_power,
+        # beep_control, light_btn_on, light_strip_on set; wifi_unabled clear
+        assert result.wifi_unabled is False
+        assert result.auto_throw is True
+        assert result.throw_percent == 0
+        assert result.lock_power is True
+        assert result.beep_control is True
+        assert result.light_btn_on is True
+        assert result.light_strip_on is True
 
     def test_short_body_defaults(self) -> None:
         """Test parsing a short body falls back to default values."""
@@ -197,6 +235,36 @@ class TestE1GeneralMessageBody:
         assert result.storage_remaining is False
         assert result.humidity is None
         assert result.bright is None
+        assert result.device_version is None
+        assert result.water_level is None
+        assert result.water_strong_level is None
+        assert result.dry_set_min is None
+        assert result.wash_region is None
+        assert result.clean_left_hour is None
+        assert result.kitchenware_left_hour is None
+        # body[37] flags not present on a short body
+        assert not hasattr(result, "auto_throw")
+        assert result.operator == ""
+
+    def test_operator_pause_in_work_status(self) -> None:
+        """Test operator reads pause when running without the start bit."""
+        body = bytearray(40)
+        body[1] = 0x03  # status Running
+        body[5] = 0x00  # start/pause bit unset
+
+        result = E1GeneralMessageBody(body)
+
+        assert result.operator == "pause"
+
+    def test_throw_percent_full_when_flag_clear(self) -> None:
+        """Test throw_percent reads full when its flag bit is clear."""
+        body = bytearray(42)
+        body[37] = 0x00  # throw percent flag clear -> full
+
+        result = E1GeneralMessageBody(body)
+
+        assert result.throw_percent == 100
+        assert result.auto_throw is False
 
     def test_start_false_when_paused_without_start_bit(self) -> None:
         """Test start is False when status is paused and start bit is unset."""

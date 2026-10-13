@@ -397,3 +397,92 @@ class TestMideaE1Device:
         """Test set_work_mode rejects an unknown mode name."""
         with pytest.raises(ValueWrongType, match="Unsupported work mode"):
             self.device.set_work_mode("spin")
+
+    @pytest.mark.parametrize(
+        "attr",
+        [
+            DeviceAttributes.additional,
+            DeviceAttributes.wash_region,
+            DeviceAttributes.water_level,
+            DeviceAttributes.water_strong_level,
+        ],
+    )
+    def test_set_attribute_wash_param_stores_value(
+        self,
+        attr: DeviceAttributes,
+    ) -> None:
+        """Test wash params are stored as a pending setting without sending."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(attr.value, 5)
+        mock_build_send.assert_not_called()
+        assert self.device._wash_param_settings[attr] == 5
+
+    def test_set_attribute_wash_param_accepts_whole_float(self) -> None:
+        """Test a wash param accepts a whole float such as 5.0."""
+        self.device.set_attribute(DeviceAttributes.water_level.value, 5.0)
+        assert self.device._wash_param_settings[DeviceAttributes.water_level] == 5
+
+    @pytest.mark.parametrize("value", [256, -1, 5.5, True, "5"])
+    def test_set_attribute_wash_param_rejects_invalid(
+        self,
+        value: float | str,
+    ) -> None:
+        """Test a wash param rejects out-of-range, fractional and non-numbers."""
+        with pytest.raises(ValueWrongType, match="must be 0 to"):
+            self.device.set_attribute(DeviceAttributes.water_level.value, value)
+
+    def test_wash_param_setting_survives_status_reply(self) -> None:
+        """Test a status reply does not clear a stored wash parameter."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        self.device.set_attribute(DeviceAttributes.additional.value, 0x05)
+        self.device.set_attribute(DeviceAttributes.wash_region.value, 0x06)
+        self.device.set_attribute(DeviceAttributes.water_level.value, 0x02)
+        self.device.set_attribute(DeviceAttributes.water_strong_level.value, 0x01)
+        # A status reply reports its own additional/water values
+        body = bytearray(42)
+        body[1] = 0x01  # status Cancel
+        body[2] = 0x04  # mode ECO Wash
+        body[3] = 0x00  # additional reported 0
+        body[30] = 0x00  # water_level reported 0
+        self.device.process_message(self._message(MessageType.query, body))
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.start_work()
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.body == bytearray.fromhex(
+            "08030405060000000000000201".ljust(76, "0"),
+        )
+
+    def test_wash_params_ride_along_with_work_command(self) -> None:
+        """Test stored wash params are carried by the next work command."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        self.device.set_attribute(DeviceAttributes.additional.value, 0x05)
+        self.device.set_attribute(DeviceAttributes.wash_region.value, 0x06)
+        self.device.set_attribute(DeviceAttributes.water_level.value, 0x02)
+        self.device.set_attribute(DeviceAttributes.water_strong_level.value, 0x01)
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.start_work()
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.body == bytearray.fromhex(
+            "08030405060000000000000201".ljust(76, "0"),
+        )
+
+    def test_process_message_maps_operator_and_sensors(self) -> None:
+        """Test process message exposes the new operator and sensor fields."""
+        body = bytearray(42)
+        body[1] = 0x03  # status Running
+        body[5] = 0x08  # operator start bit
+        body[30] = 2  # water_level
+        body[31] = 1  # water_strong_level
+        body[35] = 6  # wash_region
+        body[40] = 8  # clean_left_hour
+        new_status = self.device.process_message(
+            self._message(MessageType.query, body),
+        )
+        assert self.device.attributes[DeviceAttributes.operator] == "start"
+        assert self.device.attributes[DeviceAttributes.water_level] == 2
+        assert self.device.attributes[DeviceAttributes.water_strong_level] == 1
+        assert self.device.attributes[DeviceAttributes.wash_region] == 6
+        assert self.device.attributes[DeviceAttributes.clean_left_hour] == 8
+        assert new_status[DeviceAttributes.operator.value] == "start"

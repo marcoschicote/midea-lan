@@ -21,14 +21,39 @@ WORK_STATUS_WORK = 0x03
 WORK_STATUS_CANCEL_ORDER = 0x04
 
 # Work command offsets, after the body type byte
+WORK_ADDITIONAL_INDEX = 2
+WORK_WASH_REGION_INDEX = 3
 WORK_DELAY_HOURS_INDEX = 6
 WORK_DELAY_MINUTES_INDEX = 7
+WORK_WATER_LEVEL_INDEX = 10
+WORK_WATER_STRONG_LEVEL_INDEX = 11
 WORK_DOOR_AUTO_OPEN_INDEX = 12
 
 # Status reply offsets and flags
 DOOR_AUTO_OPEN_FLAG = 0x40
+OPERATOR_FLAG = 0x08
 DELAY_HOURS_BYTE = 7
 DELAY_MINUTES_BYTE = 8
+DEVICE_VERSION_BYTE = 28
+WATER_LEVEL_BYTE = 30
+WATER_STRONG_LEVEL_BYTE = 31
+DRY_SET_MIN_BYTE = 34
+WASH_REGION_BYTE = 35
+STATUS_FLAGS_BYTE = 37
+CLEAN_LEFT_HOUR_BYTE = 40
+KITCHENWARE_LEFT_HOUR_BYTE = 41
+
+# body[37] status flag bits
+WIFI_UNABLED_FLAG = 0x02
+AUTO_THROW_FLAG = 0x04
+THROW_PERCENT_FLAG = 0x08
+LOCK_POWER_FLAG = 0x10
+BEEP_CONTROL_FLAG = 0x20
+LIGHT_BTN_ON_FLAG = 0x40
+LIGHT_STRIP_ON_FLAG = 0x80
+
+THROW_PERCENT_EMPTY = 0
+THROW_PERCENT_FULL = 100
 
 
 class MessageE1Base(MessageRequest):
@@ -88,6 +113,10 @@ class MessageWork(MessageE1Base):
         )
         self.work_status = WORK_STATUS_WORK
         self.mode = 0
+        self.additional = 0
+        self.wash_region = 0
+        self.water_level = 0
+        self.water_strong_level = 0
         self.delay_minutes = 0
         self.door_auto_open = False
 
@@ -96,6 +125,10 @@ class MessageWork(MessageE1Base):
         body = bytearray(CONTROL_BODY_LENGTH)
         body[0] = self.work_status
         body[1] = self.mode
+        body[WORK_ADDITIONAL_INDEX] = self.additional
+        body[WORK_WASH_REGION_INDEX] = self.wash_region
+        body[WORK_WATER_LEVEL_INDEX] = self.water_level
+        body[WORK_WATER_STRONG_LEVEL_INDEX] = self.water_strong_level
         if self.work_status == WORK_STATUS_ORDER:
             (
                 body[WORK_DELAY_HOURS_INDEX],
@@ -220,6 +253,51 @@ class E1GeneralMessageBody(MessageBody):
         self.softwater = body[13]
         self.wrong_operation = body[16]
         self.bright = body[24] if len(body) > BRIGTH_BYTE else None
+        # operator: run/pause state (lua maps body[5] & 0x08 and work status)
+        if (body[5] & OPERATOR_FLAG) > 0:
+            self.operator = "start"
+        elif self.status in (WORK_STATUS_ORDER, WORK_STATUS_WORK):
+            self.operator = "pause"
+        else:
+            self.operator = ""
+        self.device_version = (
+            body[DEVICE_VERSION_BYTE] if len(body) > DEVICE_VERSION_BYTE else None
+        )
+        self.water_level = (
+            body[WATER_LEVEL_BYTE] if len(body) > WATER_STRONG_LEVEL_BYTE else None
+        )
+        self.water_strong_level = (
+            body[WATER_STRONG_LEVEL_BYTE]
+            if len(body) > WATER_STRONG_LEVEL_BYTE
+            else None
+        )
+        self.dry_set_min = (
+            body[DRY_SET_MIN_BYTE] if len(body) > DRY_SET_MIN_BYTE else None
+        )
+        self.wash_region = (
+            body[WASH_REGION_BYTE] if len(body) > WASH_REGION_BYTE else None
+        )
+        if len(body) > STATUS_FLAGS_BYTE:
+            flags = body[STATUS_FLAGS_BYTE]
+            self.wifi_unabled = (flags & WIFI_UNABLED_FLAG) > 0
+            self.auto_throw = (flags & AUTO_THROW_FLAG) > 0
+            self.throw_percent = (
+                THROW_PERCENT_EMPTY
+                if (flags & THROW_PERCENT_FLAG) > 0
+                else THROW_PERCENT_FULL
+            )
+            self.lock_power = (flags & LOCK_POWER_FLAG) > 0
+            self.beep_control = (flags & BEEP_CONTROL_FLAG) > 0
+            self.light_btn_on = (flags & LIGHT_BTN_ON_FLAG) > 0
+            self.light_strip_on = (flags & LIGHT_STRIP_ON_FLAG) > 0
+        self.clean_left_hour = (
+            body[CLEAN_LEFT_HOUR_BYTE] if len(body) > CLEAN_LEFT_HOUR_BYTE else None
+        )
+        self.kitchenware_left_hour = (
+            body[KITCHENWARE_LEFT_HOUR_BYTE]
+            if len(body) > KITCHENWARE_LEFT_HOUR_BYTE
+            else None
+        )
 
 
 class MessageE1Response(MessageResponse):
