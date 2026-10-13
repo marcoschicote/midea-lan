@@ -365,6 +365,20 @@ class MideaE1Device(MideaDevice):
         """
         self.build_send(self.make_message_set(WORK_STATUS_CANCEL))
 
+    def _cancel(self) -> None:
+        """Cancel the current activity, matching the command to the state.
+
+        A pending delayed start is cancelled with cancel_order (work_status
+        0x04); a running or otherwise active program is cancelled with cancel
+        (0x01). The device ignores the command that does not fit its state, so
+        a plain cancel (0x01) leaves a delayed start untouched. Dispatch on the
+        reported ``status`` so one "cancel" write does the right thing.
+        """
+        if self.get_attribute(DeviceAttributes.status) == STATUS_DELAY:
+            self.cancel_delayed_start()
+        else:
+            self.cancel_work()
+
     def set_delayed_start(
         self,
         mode: int,
@@ -459,7 +473,7 @@ class MideaE1Device(MideaDevice):
             STATUS_RUNNING: lambda: self.start_work(
                 door_auto_open=self._stored_door_auto_open(),
             ),
-            STATUS_CANCEL: self.cancel_work,
+            STATUS_CANCEL: self._cancel,
             STATUS_ORDER: self._start_delayed,
             STATUS_DELAY: self._start_delayed,
             STATUS_CANCEL_ORDER: self.cancel_delayed_start,

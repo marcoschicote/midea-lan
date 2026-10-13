@@ -297,13 +297,23 @@ class TestMideaE1Device:
         assert message.mode == 0x04
 
     def test_set_attribute_status_cancel(self) -> None:
-        """Test writing status cancel through set_attribute."""
+        """Test status cancel sends cancel (0x01) when not in delay."""
         self.device._attributes[DeviceAttributes.mode] = "eco_wash"
         with patch.object(self.device, "build_send") as mock_build_send:
             self.device.set_attribute(DeviceAttributes.status.value, "cancel")
         message = mock_build_send.call_args.args[0]
         assert isinstance(message, MessageWork)
         assert message.body == bytearray.fromhex("080104".ljust(76, "0"))
+
+    def test_set_attribute_status_cancel_during_delay(self) -> None:
+        """Test status cancel sends cancel_order (0x04) when delay is pending."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        self.device._attributes[DeviceAttributes.status] = "delay"
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "cancel")
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.body == bytearray.fromhex("080404".ljust(76, "0"))
 
     def test_set_attribute_status_running_starts_work(self) -> None:
         """Test status running/work starts the selected program."""
