@@ -20,6 +20,12 @@ WORK_STATUS_ORDER = 0x02
 WORK_STATUS_WORK = 0x03
 WORK_STATUS_CANCEL_ORDER = 0x04
 
+# Operator command (body type 0x83), value at body[1]
+OPERATOR_START = 0x01
+OPERATOR_PAUSE = 0x02
+LOCK_ON = 0x03
+LOCK_OFF = 0x04
+
 # Work command offsets, after the body type byte
 WORK_ADDITIONAL_INDEX = 2
 WORK_WASH_REGION_INDEX = 3
@@ -153,8 +159,30 @@ class MessageLock(MessageE1Base):
 
     @property
     def _body(self) -> bytearray:
-        lock = 0x03 if self.lock else 0x04
+        lock = LOCK_ON if self.lock else LOCK_OFF
         return bytearray([lock]) + bytearray([0x00] * 36)
+
+
+class MessageOperator(MessageE1Base):
+    """E1 message operator (pause/resume).
+
+    Shares body type 0x83 with the lock command. body[1] carries the
+    operator value: start/resume 0x01, pause 0x02 (Midea lua updateDataByJson).
+    """
+
+    def __init__(self, protocol_version: int) -> None:
+        """Initialize E1 message operator."""
+        super().__init__(
+            protocol_version=protocol_version,
+            message_type=MessageType.set,
+            body_type=ListTypes.X83,
+        )
+        self.pause = False
+
+    @property
+    def _body(self) -> bytearray:
+        operator = OPERATOR_PAUSE if self.pause else OPERATOR_START
+        return bytearray([operator]) + bytearray([0x00] * 36)
 
 
 class MessageStorage(MessageE1Base):

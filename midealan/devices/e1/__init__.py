@@ -15,6 +15,7 @@ from .message import (
     WORK_STATUS_WORK,
     MessageE1Response,
     MessageLock,
+    MessageOperator,
     MessagePower,
     MessageQuery,
     MessageStorage,
@@ -83,6 +84,10 @@ STATUS_CANCEL = "cancel"
 STATUS_ORDER = "order"
 STATUS_DELAY = "delay"
 STATUS_CANCEL_ORDER = "cancel_order"
+# Operator triggers accepted through set_attribute("status", ...) / "operator".
+STATUS_PAUSE = "pause"
+STATUS_RESUME = "resume"
+STATUS_START = "start"
 
 # Single-byte wash parameters stored and sent with the next work command.
 MAX_BYTE_VALUE = 0xFF
@@ -175,8 +180,14 @@ class MideaE1Device(MideaDevice):
             0x12: "hot_pot_wash",  # BYTE_MODE_HOT_POT_WASH
             0x13: "quiet_night_wash",  # BYTE_MODE_QUIET_NIGHT_WASH
             0x14: "less_wash",  # BYTE_MODE_LESS_WASH
+            0x15: "max_rapid_wash",  # BYTE_MODE_MAX_RAPID_WASH
             0x16: "oil_net_wash",  # BYTE_MODE_OIL_NET_WASH
             0x19: "cloud_wash",  # BYTE_MODE_CLOUD_WASH
+            0x1B: "single_dry",  # BYTE_MODE_SINGLE_DRY
+            0x1C: "single_disinfect",  # BYTE_MODE_SINGLE_DISINFECT
+            0x1D: "wahin_wash_dry",  # BYTE_MODE_WAHIN_WASH_DRY
+            0x1E: "high_temp_wash",  # BYTE_MODE_HIGH_TEMP_WASH
+            0x1F: "wash_dry",  # BYTE_MODE_WASH_DRY
         }
         self._status = {
             0x00: "power_off",
@@ -377,6 +388,18 @@ class MideaE1Device(MideaDevice):
         """Cancel a pending delayed start."""
         self.build_send(self.make_message_set(WORK_STATUS_CANCEL_ORDER))
 
+    def pause_work(self) -> None:
+        """Pause the running program (operator command, body type 0x83)."""
+        message = MessageOperator(self._message_protocol_version)
+        message.pause = True
+        self.build_send(message)
+
+    def resume_work(self) -> None:
+        """Resume a paused program (operator command, body type 0x83)."""
+        message = MessageOperator(self._message_protocol_version)
+        message.pause = False
+        self.build_send(message)
+
     def process_message(self, msg: bytes) -> dict[str, Any]:
         """Midea E1 device process message."""
         message = MessageE1Response(msg)
@@ -427,6 +450,10 @@ class MideaE1Device(MideaDevice):
             )
         elif value == STATUS_CANCEL_ORDER:
             self.cancel_delayed_start()
+        elif value == STATUS_PAUSE:
+            self.pause_work()
+        elif value in (STATUS_RESUME, STATUS_START):
+            self.resume_work()
         else:
             msg = f"[e1] Unsupported status: {value}"
             raise ValueWrongType(msg)

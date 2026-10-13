@@ -8,6 +8,7 @@ from midealan.devices.e1.message import (
     MessageE1Base,
     MessageE1Response,
     MessageLock,
+    MessageOperator,
     MessagePower,
     MessageQuery,
     MessageStorage,
@@ -110,6 +111,17 @@ class TestMessageLock:
         """Test lock body reflects the requested state."""
         message = MessageLock(ProtocolVersion.V1)
         message.lock = lock
+        assert message.body == bytearray([0x83, expected, *([0x00] * 36)])
+
+
+class TestMessageOperator:
+    """Test E1 message operator (pause/resume)."""
+
+    @pytest.mark.parametrize(("pause", "expected"), [(True, 0x02), (False, 0x01)])
+    def test_operator_body(self, pause: bool, expected: int) -> None:
+        """Test operator body matches the device-confirmed 8302/8301 commands."""
+        message = MessageOperator(ProtocolVersion.V1)
+        message.pause = pause
         assert message.body == bytearray([0x83, expected, *([0x00] * 36)])
 
 

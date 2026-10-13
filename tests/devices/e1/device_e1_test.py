@@ -9,6 +9,7 @@ from midealan.const import ProtocolVersion
 from midealan.devices.e1 import DeviceAttributes, MideaE1Device
 from midealan.devices.e1.message import (
     MessageLock,
+    MessageOperator,
     MessagePower,
     MessageQuery,
     MessageStorage,
@@ -133,6 +134,39 @@ class TestMideaE1Device:
         assert isinstance(message, MessageWork)
         assert message.body == bytearray.fromhex("080404".ljust(76, "0"))
 
+    def test_pause_work(self) -> None:
+        """Test pausing emits the 8302 operator command."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.pause_work()
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageOperator)
+        assert message.body[:2] == bytearray.fromhex("8302")
+
+    def test_resume_work(self) -> None:
+        """Test resuming emits the 8301 operator command."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.resume_work()
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageOperator)
+        assert message.body[:2] == bytearray.fromhex("8301")
+
+    def test_set_attribute_status_pause(self) -> None:
+        """Test set_attribute('status', 'pause') pauses the program."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "pause")
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageOperator)
+        assert message.body[:2] == bytearray.fromhex("8302")
+
+    @pytest.mark.parametrize("trigger", ["resume", "start"])
+    def test_set_attribute_status_resume(self, trigger: str) -> None:
+        """Test set_attribute('status', 'resume'/'start') resumes the program."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, trigger)
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageOperator)
+        assert message.body[:2] == bytearray.fromhex("8301")
+
     @pytest.mark.parametrize("mode", [None, 0, "neutral_gear"])
     def test_start_work_requires_selected_mode(self, mode: str | int | None) -> None:
         """Test starting requires a non-neutral selected mode."""
@@ -167,6 +201,29 @@ class TestMideaE1Device:
         assert self.device.attributes[DeviceAttributes.mode] == "eco_wash"
         assert self.device.attributes[DeviceAttributes.progress] == "rinse"
         assert new_status[DeviceAttributes.status.value] == "running"
+
+    @pytest.mark.parametrize(
+        ("mode_byte", "mode_name"),
+        [
+            (0x15, "max_rapid_wash"),
+            (0x1B, "single_dry"),
+            (0x1C, "single_disinfect"),
+            (0x1D, "wahin_wash_dry"),
+            (0x1E, "high_temp_wash"),
+            (0x1F, "wash_dry"),
+        ],
+    )
+    def test_process_message_extended_modes(
+        self,
+        mode_byte: int,
+        mode_name: str,
+    ) -> None:
+        """Test the richer models' extended wash modes decode (lua 7600002B)."""
+        body = bytearray(40)
+        body[1] = 0x03
+        body[2] = mode_byte
+        self.device.process_message(self._message(MessageType.query, body))
+        assert self.device.attributes[DeviceAttributes.mode] == mode_name
 
     def test_process_message_unknown_status_mode_and_progress(self) -> None:
         """Test process message returns None for unmapped lookup values."""
