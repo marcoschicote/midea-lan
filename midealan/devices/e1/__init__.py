@@ -60,6 +60,10 @@ class DeviceAttributes(StrEnum):
     door_auto_open = "door_auto_open"
     delay_remaining = "delay_remaining"
     delay_minutes = "delay_minutes"
+    # Settings for the next start, kept apart from the reported state
+    program = "program"
+    door_auto_open_setting = "door_auto_open_setting"
+    additional_setting = "additional_setting"
     # Sensors (read-only), decoded from the status reply
     operator = "operator"
     wash_region = "wash_region"
@@ -145,6 +149,9 @@ class MideaE1Device(MideaDevice):
                 DeviceAttributes.door_auto_open: False,
                 DeviceAttributes.delay_remaining: 0,
                 DeviceAttributes.delay_minutes: 0,
+                DeviceAttributes.program: None,
+                DeviceAttributes.door_auto_open_setting: False,
+                DeviceAttributes.additional_setting: 0,
                 DeviceAttributes.operator: None,
                 DeviceAttributes.wash_region: 0,
                 DeviceAttributes.water_level: None,
@@ -456,10 +463,27 @@ class MideaE1Device(MideaDevice):
         """Return the door auto-open setting for the next command."""
         return self._door_auto_open_setting
 
+    def _selected_mode(self) -> int:
+        """Return the program to start: the selected one, else the reported mode."""
+        program = self.get_attribute(DeviceAttributes.program)
+        if isinstance(program, str):
+            return self._resolve_mode(program)
+        return self._current_mode()
+
+    def _start_selected(self) -> None:
+        """Start the selected program, or the reported one if none is selected."""
+        if self.get_attribute(DeviceAttributes.program) is None:
+            self.start_work(door_auto_open=self._stored_door_auto_open())
+            return
+        self.set_work_mode(
+            self._selected_mode(),
+            door_auto_open=self._stored_door_auto_open(),
+        )
+
     def _start_delayed(self) -> None:
-        """Start a delayed program from the stored mode and delay."""
+        """Start a delayed program from the selected mode and stored delay."""
         self.set_delayed_start(
-            self._current_mode(),
+            self._selected_mode(),
             self._stored_delay_minutes(),
             door_auto_open=self._stored_door_auto_open(),
         )
@@ -467,12 +491,8 @@ class MideaE1Device(MideaDevice):
     def _set_status(self, value: str) -> None:
         """Issue a work command from a status trigger write."""
         actions: dict[str, Callable[[], None]] = {
-            STATUS_WORK: lambda: self.start_work(
-                door_auto_open=self._stored_door_auto_open(),
-            ),
-            STATUS_RUNNING: lambda: self.start_work(
-                door_auto_open=self._stored_door_auto_open(),
-            ),
+            STATUS_WORK: self._start_selected,
+            STATUS_RUNNING: self._start_selected,
             STATUS_CANCEL: self._cancel,
             STATUS_ORDER: self._start_delayed,
             STATUS_DELAY: self._start_delayed,
@@ -495,6 +515,12 @@ class MideaE1Device(MideaDevice):
         selected program and ``status`` issues the matching work command
         (work/cancel/order/cancel_order), so the whole device can be driven
         through set_attribute, like e2/e6.
+
+        ``program`` selects a program without starting it; ``status`` work and
+        order then use it instead of the reported mode. ``door_auto_open_setting``
+        and ``additional_setting`` are the readable settings for the next start
+        (writing ``door_auto_open`` / ``additional`` sets them too), while
+        ``door_auto_open`` / ``additional`` report what the device last sent.
         """
         if attr == DeviceAttributes.mode:
             self.set_work_mode(
@@ -505,6 +531,17 @@ class MideaE1Device(MideaDevice):
         if attr == DeviceAttributes.status:
             self._set_status(str(value))
             return
+        if attr == DeviceAttributes.program:
+            mode = self._resolve_mode(value)
+            if mode == 0:
+                msg = "[e1] No work mode selected"
+                raise ValueWrongType(msg)
+            self._attributes[DeviceAttributes.program] = self._modes[mode]
+            return
+        if attr == DeviceAttributes.additional_setting:
+            attr = DeviceAttributes.additional
+        elif attr == DeviceAttributes.door_auto_open_setting:
+            attr = DeviceAttributes.door_auto_open
         if attr == DeviceAttributes.delay_minutes:
             minutes = (
                 int(value) if isinstance(value, float) and value.is_integer() else value
@@ -520,6 +557,10 @@ class MideaE1Device(MideaDevice):
                 attr,
                 number,
             )
+            if attr == DeviceAttributes.additional:
+                self._attributes[DeviceAttributes.additional_setting] = (
+                    self._wash_param_settings[DeviceAttributes.additional]
+                )
             return
 
         if not isinstance(value, bool):
@@ -527,6 +568,7 @@ class MideaE1Device(MideaDevice):
         message: MessagePower | MessageLock | MessageStorage | None = None
         if attr == DeviceAttributes.door_auto_open:
             self._door_auto_open_setting = value
+            self._attributes[DeviceAttributes.door_auto_open_setting] = value
         elif attr == DeviceAttributes.power:
             message = MessagePower(self._message_protocol_version)
             message.power = value

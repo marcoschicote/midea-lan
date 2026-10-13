@@ -364,6 +364,73 @@ class TestMideaE1Device:
         with pytest.raises(ValueWrongType, match="Delay must be"):
             self.device.set_attribute(DeviceAttributes.delay_minutes.value, 0)
 
+    def test_set_attribute_program_selects_without_starting(self) -> None:
+        """Test writing program stores the choice without sending anything."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.program.value, "glass_wash")
+        mock_build_send.assert_not_called()
+        assert self.device.attributes[DeviceAttributes.program.value] == "glass_wash"
+
+    @pytest.mark.parametrize("program", [0x00, "neutral_gear", "spin", 0x11])
+    def test_set_attribute_program_rejects_invalid(self, program: int | str) -> None:
+        """Test program rejects the neutral mode and unknown modes."""
+        with pytest.raises(ValueWrongType):
+            self.device.set_attribute(DeviceAttributes.program.value, program)
+
+    def test_status_work_starts_selected_program(self) -> None:
+        """Test status work starts the selected program, not the reported one."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        self.device.set_attribute(DeviceAttributes.program.value, 0x05)
+        self.device.set_attribute(DeviceAttributes.door_auto_open_setting.value, True)
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "work")
+        message = mock_build_send.call_args.args[0]
+        assert message.body == bytearray.fromhex(
+            "0803050000000000000000000001".ljust(76, "0"),
+        )
+
+    def test_status_order_from_cancel_uses_selected_program(self) -> None:
+        """Test a delayed start from idle after a cancel uses the selected program."""
+        self.device._attributes[DeviceAttributes.mode] = "neutral_gear"
+        self.device.set_attribute(DeviceAttributes.program.value, "eco_wash")
+        self.device.set_attribute(DeviceAttributes.delay_minutes.value, 60)
+        self.device.set_attribute(DeviceAttributes.door_auto_open_setting.value, True)
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "order")
+        message = mock_build_send.call_args.args[0]
+        assert message.body == bytearray.fromhex(
+            "0802040000000001000000000001".ljust(76, "0"),
+        )
+
+    def test_settings_are_readable_and_survive_status_reply(self) -> None:
+        """Test the next-start settings are readable and not overwritten."""
+        self.device.set_attribute(DeviceAttributes.door_auto_open_setting.value, True)
+        self.device.set_attribute(DeviceAttributes.additional_setting.value, 2)
+        body = bytearray(40)
+        body[1] = 0x01  # status Cancel, door auto-open bit clear, additional 0
+        self.device.process_message(self._message(MessageType.query, body))
+        attributes = self.device.attributes
+        assert attributes[DeviceAttributes.door_auto_open_setting.value] is True
+        assert attributes[DeviceAttributes.additional_setting.value] == 2
+        assert attributes[DeviceAttributes.door_auto_open.value] is False
+        assert attributes[DeviceAttributes.additional.value] == 0
+
+    def test_legacy_setting_names_update_readable_settings(self) -> None:
+        """Test writing door_auto_open / additional also sets the readable settings."""
+        self.device.set_attribute(DeviceAttributes.door_auto_open.value, True)
+        self.device.set_attribute(DeviceAttributes.additional.value, 2)
+        attributes = self.device.attributes
+        assert attributes[DeviceAttributes.door_auto_open_setting.value] is True
+        assert attributes[DeviceAttributes.additional_setting.value] == 2
+
+    def test_additional_setting_is_sent_with_the_start(self) -> None:
+        """Test additional_setting rides along with the next start."""
+        self.device.set_attribute(DeviceAttributes.additional_setting.value, 2)
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.mode.value, "eco_wash")
+        message = mock_build_send.call_args.args[0]
+        assert message.body == bytearray.fromhex("08030402".ljust(76, "0"))
+
     def test_set_attribute_door_auto_open_stores_value(self) -> None:
         """Test door_auto_open is stored without sending a message."""
         with patch.object(self.device, "build_send") as mock_build_send:
