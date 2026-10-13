@@ -31,6 +31,7 @@ WORK_DOOR_AUTO_OPEN_INDEX = 12
 
 # Status reply offsets and flags
 DOOR_AUTO_OPEN_FLAG = 0x40
+OPERATOR_BYTE = 5
 OPERATOR_FLAG = 0x08
 DELAY_HOURS_BYTE = 7
 DELAY_MINUTES_BYTE = 8
@@ -207,7 +208,7 @@ class E1GeneralMessageBody(MessageBody):
         self.door = (body[5] & 0x01) == 0  # 0 - open, 1 - close
         self.rinse_aid = (body[5] & 0x02) > 0  # 0 - enough, 1 - shortage
         self.salt = (body[5] & 0x04) > 0  # 0 - enough, 1 - shortage
-        start_pause = (body[5] & 0x08) > 0  # operator
+        start_pause = (body[OPERATOR_BYTE] & OPERATOR_FLAG) > 0  # operator
         if start_pause:
             self.start = True
         elif self.status in [2, 3]:
@@ -254,7 +255,7 @@ class E1GeneralMessageBody(MessageBody):
         self.wrong_operation = body[16]
         self.bright = body[24] if len(body) > BRIGTH_BYTE else None
         # operator: run/pause state (lua maps body[5] & 0x08 and work status)
-        if (body[5] & OPERATOR_FLAG) > 0:
+        if (body[OPERATOR_BYTE] & OPERATOR_FLAG) > 0:
             self.operator = "start"
         elif self.status in (WORK_STATUS_ORDER, WORK_STATUS_WORK):
             self.operator = "pause"
