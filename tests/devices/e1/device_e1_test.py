@@ -218,5 +218,100 @@ class TestMideaE1Device:
     def test_set_attribute_unknown_attribute_is_noop(self) -> None:
         """Test set attribute with an unsupported attribute sends nothing."""
         with patch.object(self.device, "build_send") as mock_build_send:
-            self.device.set_attribute(DeviceAttributes.mode.value, True)
+            self.device.set_attribute(DeviceAttributes.uv.value, True)
         mock_build_send.assert_not_called()
+
+    def test_set_attribute_mode_starts_program(self) -> None:
+        """Test writing mode through set_attribute starts the program."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.mode.value, "eco_wash")
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.work_status == 0x03
+        assert message.mode == 0x04
+
+    def test_set_attribute_mode_by_code(self) -> None:
+        """Test writing a mode code through set_attribute."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.mode.value, 0x04)
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.mode == 0x04
+
+    def test_set_attribute_status_cancel(self) -> None:
+        """Test writing status cancel through set_attribute."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "cancel")
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.body == bytearray.fromhex("080104".ljust(76, "0"))
+
+    def test_set_attribute_status_running_starts_work(self) -> None:
+        """Test status running/work starts the selected program."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "running")
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.work_status == 0x03
+        assert message.mode == 0x04
+
+    def test_set_attribute_status_order_uses_stored_delay(self) -> None:
+        """Test status order sends a delayed start with the stored delay."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        self.device._attributes[DeviceAttributes.delay_minutes] = 60
+        self.device._attributes[DeviceAttributes.door_auto_open] = True
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "order")
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.body == bytearray.fromhex(
+            "0802040000000001000000000001".ljust(76, "0"),
+        )
+
+    def test_set_attribute_status_cancel_order(self) -> None:
+        """Test status cancel_order cancels a pending delayed start."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "cancel_order")
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.body == bytearray.fromhex("080404".ljust(76, "0"))
+
+    def test_set_attribute_status_unknown(self) -> None:
+        """Test an unknown status trigger is rejected."""
+        with pytest.raises(ValueWrongType, match="Unsupported status"):
+            self.device.set_attribute(DeviceAttributes.status.value, "spin")
+
+    def test_set_attribute_delay_minutes_stores_value(self) -> None:
+        """Test delay_minutes is stored and reused by a later order."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.delay_minutes.value, 90)
+        mock_build_send.assert_not_called()
+        assert self.device.attributes[DeviceAttributes.delay_minutes.value] == 90
+
+    def test_set_attribute_delay_minutes_rejects_out_of_range(self) -> None:
+        """Test delay_minutes rejects out of range values."""
+        with pytest.raises(ValueWrongType, match="Delay must be"):
+            self.device.set_attribute(DeviceAttributes.delay_minutes.value, 0)
+
+    def test_set_attribute_door_auto_open_stores_value(self) -> None:
+        """Test door_auto_open is stored without sending a message."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.door_auto_open.value, True)
+        mock_build_send.assert_not_called()
+        assert self.device.attributes[DeviceAttributes.door_auto_open.value] is True
+
+    def test_set_work_mode_by_name(self) -> None:
+        """Test set_work_mode accepts a mode name."""
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_work_mode("eco_wash")
+        message = mock_build_send.call_args.args[0]
+        assert isinstance(message, MessageWork)
+        assert message.mode == 0x04
+
+    def test_set_work_mode_rejects_unknown_name(self) -> None:
+        """Test set_work_mode rejects an unknown mode name."""
+        with pytest.raises(ValueWrongType, match="Unsupported work mode"):
+            self.device.set_work_mode("spin")

@@ -12,6 +12,7 @@ from .message import (
     WORK_STATUS_CANCEL,
     WORK_STATUS_CANCEL_ORDER,
     WORK_STATUS_ORDER,
+    WORK_STATUS_WORK,
     MessageE1Response,
     MessageLock,
     MessagePower,
@@ -54,6 +55,18 @@ class DeviceAttributes(StrEnum):
     bright = "bright"
     door_auto_open = "door_auto_open"
     delay_remaining = "delay_remaining"
+    delay_minutes = "delay_minutes"
+
+
+# Work-command triggers accepted through set_attribute("status", ...). The keys
+# mirror the names exposed in the "status" attribute (see self._status) plus the
+# plain "work"/"order" aliases.
+STATUS_WORK = "work"
+STATUS_RUNNING = "running"
+STATUS_CANCEL = "cancel"
+STATUS_ORDER = "order"
+STATUS_DELAY = "delay"
+STATUS_CANCEL_ORDER = "cancel_order"
 
 
 class MideaE1Device(MideaDevice):
@@ -96,6 +109,7 @@ class MideaE1Device(MideaDevice):
                 DeviceAttributes.bright: 0,
                 DeviceAttributes.door_auto_open: False,
                 DeviceAttributes.delay_remaining: 0,
+                DeviceAttributes.delay_minutes: 0,
             },
         )
         self._modes = {
@@ -160,8 +174,50 @@ class MideaE1Device(MideaDevice):
             0,
         )
 
-    def set_work_mode(self, mode: int, *, door_auto_open: bool = False) -> None:
+    def _resolve_mode(self, mode: int | str) -> int:
+        """Return the mode code for a code or name, validated."""
+        if isinstance(mode, str):
+            mode = next(
+                (code for code, name in self._modes.items() if name == mode),
+                -1,
+            )
+        self._check_mode(mode)
+        return mode
+
+    def _check_delay(self, minutes: int) -> None:
+        if not 0 < minutes <= MAX_DELAY_MINUTES:
+            msg = f"[e1] Delay must be 1 to {MAX_DELAY_MINUTES} minutes: {minutes}"
+            raise ValueWrongType(msg)
+
+    def make_message_set(
+        self,
+        work_status: int,
+        *,
+        mode: int | None = None,
+        delay_minutes: int | None = None,
+        door_auto_open: bool | None = None,
+    ) -> MessageWork:
+        """Build the E1 work command from the current state.
+
+        Explicit callers may override ``mode``, ``delay_minutes`` and
+        ``door_auto_open``; anything left as ``None`` falls back to the stored
+        attribute, so a plain ``set_attribute`` write reuses the device state.
+        """
+        message = MessageWork(self._message_protocol_version)
+        message.work_status = work_status
+        message.mode = self._current_mode() if mode is None else mode
+        message.delay_minutes = (
+            self._stored_delay_minutes() if delay_minutes is None else delay_minutes
+        )
+        message.door_auto_open = (
+            self._stored_door_auto_open() if door_auto_open is None else door_auto_open
+        )
+        return message
+
+    def set_work_mode(self, mode: int | str, *, door_auto_open: bool = False) -> None:
         """Set the dishwasher work mode and start the selected program.
+
+        ``mode`` may be a numeric code or a mode name.
 
         Raises
         ------
@@ -169,11 +225,14 @@ class MideaE1Device(MideaDevice):
             If the mode code is not supported.
 
         """
-        self._check_mode(mode)
-        message = MessageWork(self._message_protocol_version)
-        message.mode = mode
-        message.door_auto_open = door_auto_open
-        self.build_send(message)
+        resolved = self._resolve_mode(mode)
+        self.build_send(
+            self.make_message_set(
+                WORK_STATUS_WORK,
+                mode=resolved,
+                door_auto_open=door_auto_open,
+            ),
+        )
 
     def start_work(self, *, door_auto_open: bool = False) -> None:
         """Start the dishwasher using its currently selected work mode.
@@ -204,10 +263,7 @@ class MideaE1Device(MideaDevice):
 
         A plain power off is ignored by some models while a program runs.
         """
-        message = MessageWork(self._message_protocol_version)
-        message.work_status = WORK_STATUS_CANCEL
-        message.mode = self._current_mode()
-        self.build_send(message)
+        self.build_send(self.make_message_set(WORK_STATUS_CANCEL))
 
     def set_delayed_start(
         self,
@@ -224,26 +280,23 @@ class MideaE1Device(MideaDevice):
             If the mode code is not supported or the delay is out of range.
 
         """
-        self._check_mode(mode)
+        mode = self._resolve_mode(mode)
         if mode == 0:
             msg = "[e1] No work mode selected"
             raise ValueWrongType(msg)
-        if not 0 < minutes <= MAX_DELAY_MINUTES:
-            msg = f"[e1] Delay must be 1 to {MAX_DELAY_MINUTES} minutes: {minutes}"
-            raise ValueWrongType(msg)
-        message = MessageWork(self._message_protocol_version)
-        message.work_status = WORK_STATUS_ORDER
-        message.mode = mode
-        message.delay_minutes = minutes
-        message.door_auto_open = door_auto_open
-        self.build_send(message)
+        self._check_delay(minutes)
+        self.build_send(
+            self.make_message_set(
+                WORK_STATUS_ORDER,
+                mode=mode,
+                delay_minutes=minutes,
+                door_auto_open=door_auto_open,
+            ),
+        )
 
     def cancel_delayed_start(self) -> None:
         """Cancel a pending delayed start."""
-        message = MessageWork(self._message_protocol_version)
-        message.work_status = WORK_STATUS_CANCEL_ORDER
-        message.mode = self._current_mode()
-        self.build_send(message)
+        self.build_send(self.make_message_set(WORK_STATUS_CANCEL_ORDER))
 
     def process_message(self, msg: bytes) -> dict[str, Any]:
         """Midea E1 device process message."""
@@ -267,12 +320,61 @@ class MideaE1Device(MideaDevice):
                 new_status[str(status)] = self._attributes[status]
         return new_status
 
+    def _stored_delay_minutes(self) -> int:
+        """Return the stored delay in minutes, 0 if unset."""
+        value = self.get_attribute(DeviceAttributes.delay_minutes)
+        return int(value) if isinstance(value, (int, bool)) else 0
+
+    def _stored_door_auto_open(self) -> bool:
+        """Return the stored door auto-open flag."""
+        return bool(self.get_attribute(DeviceAttributes.door_auto_open))
+
+    def _set_status(self, value: str) -> None:
+        """Issue a work command from a status trigger write."""
+        door_auto_open = self._stored_door_auto_open()
+        if value in (STATUS_WORK, STATUS_RUNNING):
+            self.start_work(door_auto_open=door_auto_open)
+        elif value == STATUS_CANCEL:
+            self.cancel_work()
+        elif value in (STATUS_ORDER, STATUS_DELAY):
+            self.set_delayed_start(
+                self._current_mode(),
+                self._stored_delay_minutes(),
+                door_auto_open=door_auto_open,
+            )
+        elif value == STATUS_CANCEL_ORDER:
+            self.cancel_delayed_start()
+        else:
+            msg = f"[e1] Unsupported status: {value}"
+            raise ValueWrongType(msg)
+
     def set_attribute(self, attr: str, value: bool | float | str) -> None:
-        """Midea E1 device set attribute."""
+        """Midea E1 device set attribute.
+
+        Boolean toggles (power, child_lock, storage, door_auto_open) and the
+        delay_minutes value are applied directly. Writing ``mode`` starts the
+        selected program and ``status`` issues the matching work command
+        (work/cancel/order/cancel_order), so the whole device can be driven
+        through set_attribute, like e2/e6.
+        """
+        if attr == DeviceAttributes.mode:
+            self.set_work_mode(value if isinstance(value, (int, str)) else int(value))
+            return
+        if attr == DeviceAttributes.status:
+            self._set_status(str(value))
+            return
+        if attr == DeviceAttributes.delay_minutes:
+            minutes = int(value)
+            self._check_delay(minutes)
+            self._attributes[DeviceAttributes.delay_minutes] = minutes
+            return
+
         if not isinstance(value, bool):
             raise ValueWrongType("[e1] Expected bool")
         message: MessagePower | MessageLock | MessageStorage | None = None
-        if attr == DeviceAttributes.power:
+        if attr == DeviceAttributes.door_auto_open:
+            self._attributes[DeviceAttributes.door_auto_open] = value
+        elif attr == DeviceAttributes.power:
             message = MessagePower(self._message_protocol_version)
             message.power = value
             self.build_send(message)
