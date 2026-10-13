@@ -265,7 +265,7 @@ class E1GeneralMessageBody(MessageBody):
             body[DEVICE_VERSION_BYTE] if len(body) > DEVICE_VERSION_BYTE else None
         )
         self.water_level = (
-            body[WATER_LEVEL_BYTE] if len(body) > WATER_STRONG_LEVEL_BYTE else None
+            body[WATER_LEVEL_BYTE] if len(body) > WATER_LEVEL_BYTE else None
         )
         self.water_strong_level = (
             body[WATER_STRONG_LEVEL_BYTE]
