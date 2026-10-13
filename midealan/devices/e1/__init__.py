@@ -370,7 +370,7 @@ class MideaE1Device(MideaDevice):
 
         A plain power off is ignored by some models while a program runs.
         """
-        self.build_send(self.make_message_set(WORK_STATUS_CANCEL))
+        self.build_send(self._make_cancel(WORK_STATUS_CANCEL))
 
     def _cancel(self) -> None:
         """Cancel the current activity, matching the command to the state.
@@ -417,7 +417,18 @@ class MideaE1Device(MideaDevice):
 
     def cancel_delayed_start(self) -> None:
         """Cancel a pending delayed start."""
-        self.build_send(self.make_message_set(WORK_STATUS_CANCEL_ORDER))
+        self.build_send(self._make_cancel(WORK_STATUS_CANCEL_ORDER))
+
+    def _make_cancel(self, work_status: int) -> MessageWork:
+        """Build a cancel command with only work status and mode.
+
+        The next-start settings (door auto-open, wash parameters) are left at
+        zero, matching the cancel bodies verified on model 76000228.
+        """
+        message = MessageWork(self._message_protocol_version)
+        message.work_status = work_status
+        message.mode = self._current_mode()
+        return message
 
     def pause_work(self) -> None:
         """Pause the running program (operator command, body type 0x83)."""

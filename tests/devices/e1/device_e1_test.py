@@ -423,6 +423,26 @@ class TestMideaE1Device:
         assert attributes[DeviceAttributes.door_auto_open_setting.value] is True
         assert attributes[DeviceAttributes.additional_setting.value] == 2
 
+    @pytest.mark.parametrize(
+        ("status", "reported", "expected"),
+        [("cancel", "running", "080104"), ("cancel", "delay", "080404")],
+    )
+    def test_cancel_leaves_out_next_start_settings(
+        self,
+        status: str,
+        reported: str,
+        expected: str,
+    ) -> None:
+        """Test cancels carry only status and mode, not the next-start settings."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        self.device._attributes[DeviceAttributes.status] = reported
+        self.device.set_attribute(DeviceAttributes.door_auto_open_setting.value, True)
+        self.device.set_attribute(DeviceAttributes.additional_setting.value, 2)
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, status)
+        message = mock_build_send.call_args.args[0]
+        assert message.body == bytearray.fromhex(expected.ljust(76, "0"))
+
     def test_additional_setting_is_sent_with_the_start(self) -> None:
         """Test additional_setting rides along with the next start."""
         self.device.set_attribute(DeviceAttributes.additional_setting.value, 2)
