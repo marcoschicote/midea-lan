@@ -236,6 +236,9 @@ class MideaE1Device(MideaDevice):
 
         """
         resolved = self._resolve_mode(mode)
+        if resolved == 0:
+            msg = "[e1] No work mode selected"
+            raise ValueWrongType(msg)
         self.build_send(
             self.make_message_set(
                 WORK_STATUS_WORK,

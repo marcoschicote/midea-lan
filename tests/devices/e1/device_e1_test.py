@@ -341,6 +341,36 @@ class TestMideaE1Device:
         self.device.set_attribute(DeviceAttributes.delay_minutes.value, 90.0)
         assert self.device.attributes[DeviceAttributes.delay_minutes.value] == 90
 
+    @pytest.mark.parametrize(
+        ("minutes", "delay_hex"),
+        [(1, "0001"), (24 * 60, "1800")],
+    )
+    def test_set_attribute_delay_minutes_boundaries(
+        self,
+        minutes: int,
+        delay_hex: str,
+    ) -> None:
+        """Test the shortest and longest delays are stored and encoded."""
+        self.device._attributes[DeviceAttributes.mode] = "eco_wash"
+        self.device.set_attribute(DeviceAttributes.delay_minutes.value, minutes)
+        assert self.device.attributes[DeviceAttributes.delay_minutes.value] == minutes
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "order")
+        message = mock_build_send.call_args.args[0]
+        assert message.body == bytearray.fromhex(
+            f"08020400000000{delay_hex}".ljust(76, "0"),
+        )
+
+    @pytest.mark.parametrize("mode", [0x00, "neutral_gear"])
+    def test_set_attribute_mode_rejects_neutral(self, mode: int | str) -> None:
+        """Test writing the neutral mode does not start a program."""
+        with (
+            patch.object(self.device, "build_send") as mock_build_send,
+            pytest.raises(ValueWrongType, match="No work mode selected"),
+        ):
+            self.device.set_attribute(DeviceAttributes.mode.value, mode)
+        mock_build_send.assert_not_called()
+
     @pytest.mark.parametrize("value", [90.9, True, "90"])
     def test_set_attribute_delay_minutes_rejects_invalid(
         self,
