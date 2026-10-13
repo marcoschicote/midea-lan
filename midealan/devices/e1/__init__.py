@@ -2,7 +2,7 @@
 
 import logging
 from enum import StrEnum
-from typing import Any, Unpack
+from typing import Any, Unpack, cast
 
 from midealan.const import DeviceType
 from midealan.device import MideaDevice, MideaDeviceInitKwargs
@@ -145,6 +145,9 @@ class MideaE1Device(MideaDevice):
             0x05: "soft_gear",
         }
         self._progress = ["idle", "pre_wash", "wash", "rinse", "dry", "complete"]
+        # Door auto-open to send with the next work/order command. Kept apart
+        # from the door_auto_open attribute, which status replies overwrite.
+        self._door_auto_open_setting = False
 
     @property
     def modes(self) -> dict[int, str]:
@@ -174,18 +177,25 @@ class MideaE1Device(MideaDevice):
             0,
         )
 
-    def _resolve_mode(self, mode: int | str) -> int:
+    def _resolve_mode(self, mode: object) -> int:
         """Return the mode code for a code or name, validated."""
         if isinstance(mode, str):
             mode = next(
                 (code for code, name in self._modes.items() if name == mode),
                 -1,
             )
+        if isinstance(mode, bool) or not isinstance(mode, int):
+            msg = f"[e1] Unsupported work mode: {mode}"
+            raise ValueWrongType(msg)
         self._check_mode(mode)
         return mode
 
-    def _check_delay(self, minutes: int) -> None:
-        if not 0 < minutes <= MAX_DELAY_MINUTES:
+    def _check_delay(self, minutes: object) -> None:
+        if (
+            isinstance(minutes, bool)
+            or not isinstance(minutes, int)
+            or not 0 < minutes <= MAX_DELAY_MINUTES
+        ):
             msg = f"[e1] Delay must be 1 to {MAX_DELAY_MINUTES} minutes: {minutes}"
             raise ValueWrongType(msg)
 
@@ -326,8 +336,8 @@ class MideaE1Device(MideaDevice):
         return int(value) if isinstance(value, (int, bool)) else 0
 
     def _stored_door_auto_open(self) -> bool:
-        """Return the stored door auto-open flag."""
-        return bool(self.get_attribute(DeviceAttributes.door_auto_open))
+        """Return the door auto-open setting for the next command."""
+        return self._door_auto_open_setting
 
     def _set_status(self, value: str) -> None:
         """Issue a work command from a status trigger write."""
@@ -358,22 +368,27 @@ class MideaE1Device(MideaDevice):
         through set_attribute, like e2/e6.
         """
         if attr == DeviceAttributes.mode:
-            self.set_work_mode(value if isinstance(value, (int, str)) else int(value))
+            self.set_work_mode(
+                self._resolve_mode(value),
+                door_auto_open=self._stored_door_auto_open(),
+            )
             return
         if attr == DeviceAttributes.status:
             self._set_status(str(value))
             return
         if attr == DeviceAttributes.delay_minutes:
-            minutes = int(value)
+            minutes = (
+                int(value) if isinstance(value, float) and value.is_integer() else value
+            )
             self._check_delay(minutes)
-            self._attributes[DeviceAttributes.delay_minutes] = minutes
+            self._attributes[DeviceAttributes.delay_minutes] = cast("int", minutes)
             return
 
         if not isinstance(value, bool):
             raise ValueWrongType("[e1] Expected bool")
         message: MessagePower | MessageLock | MessageStorage | None = None
         if attr == DeviceAttributes.door_auto_open:
-            self._attributes[DeviceAttributes.door_auto_open] = value
+            self._door_auto_open_setting = value
         elif attr == DeviceAttributes.power:
             message = MessagePower(self._message_protocol_version)
             message.power = value

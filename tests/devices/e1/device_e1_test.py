@@ -1,5 +1,6 @@
 """Test E1 device."""
 
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -260,9 +261,9 @@ class TestMideaE1Device:
     def test_set_attribute_status_order_uses_stored_delay(self) -> None:
         """Test status order sends a delayed start with the stored delay."""
         self.device._attributes[DeviceAttributes.mode] = "eco_wash"
-        self.device._attributes[DeviceAttributes.delay_minutes] = 60
-        self.device._attributes[DeviceAttributes.door_auto_open] = True
         with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.delay_minutes.value, 60)
+            self.device.set_attribute(DeviceAttributes.door_auto_open.value, True)
             self.device.set_attribute(DeviceAttributes.status.value, "order")
         message = mock_build_send.call_args.args[0]
         assert isinstance(message, MessageWork)
@@ -301,7 +302,58 @@ class TestMideaE1Device:
         with patch.object(self.device, "build_send") as mock_build_send:
             self.device.set_attribute(DeviceAttributes.door_auto_open.value, True)
         mock_build_send.assert_not_called()
-        assert self.device.attributes[DeviceAttributes.door_auto_open.value] is True
+
+    def test_door_auto_open_setting_survives_status_reply(self) -> None:
+        """Test a status reply does not clear the stored door auto-open."""
+        self.device.set_attribute(DeviceAttributes.door_auto_open.value, True)
+        self.device.set_attribute(DeviceAttributes.delay_minutes.value, 60)
+        body = bytearray(40)
+        body[1] = 0x01  # status Cancel, door auto-open bit clear
+        body[2] = 0x04  # mode ECO Wash
+        self.device.process_message(self._message(MessageType.query, body))
+        assert self.device.attributes[DeviceAttributes.door_auto_open] is False
+
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.status.value, "order")
+        message = mock_build_send.call_args.args[0]
+        assert message.body == bytearray.fromhex(
+            "0802040000000001000000000001".ljust(76, "0"),
+        )
+
+    def test_set_attribute_mode_uses_door_auto_open_setting(self) -> None:
+        """Test writing mode applies the stored door auto-open setting."""
+        self.device.set_attribute(DeviceAttributes.door_auto_open.value, True)
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.mode.value, 0x04)
+        message = mock_build_send.call_args.args[0]
+        assert message.body == bytearray.fromhex(
+            "0803040000000000000000000001".ljust(76, "0"),
+        )
+
+    @pytest.mark.parametrize("value", [True, 4.9, 4.0])
+    def test_set_attribute_mode_rejects_non_integer(self, value: float) -> None:
+        """Test writing mode rejects booleans and floats."""
+        with pytest.raises(ValueWrongType, match="Unsupported work mode"):
+            self.device.set_attribute(DeviceAttributes.mode.value, value)
+
+    def test_set_attribute_delay_minutes_accepts_whole_float(self) -> None:
+        """Test delay_minutes accepts a whole float such as 90.0."""
+        self.device.set_attribute(DeviceAttributes.delay_minutes.value, 90.0)
+        assert self.device.attributes[DeviceAttributes.delay_minutes.value] == 90
+
+    @pytest.mark.parametrize("value", [90.9, True, "90"])
+    def test_set_attribute_delay_minutes_rejects_invalid(
+        self,
+        value: float | str,
+    ) -> None:
+        """Test delay_minutes rejects fractions, booleans and strings."""
+        with pytest.raises(ValueWrongType, match="Delay must be"):
+            self.device.set_attribute(DeviceAttributes.delay_minutes.value, value)
+
+    def test_set_delayed_start_rejects_fractional_delay(self) -> None:
+        """Test a delayed start rejects a fractional delay."""
+        with pytest.raises(ValueWrongType, match="Delay must be"):
+            self.device.set_delayed_start(0x04, cast("int", 60.5))
 
     def test_set_work_mode_by_name(self) -> None:
         """Test set_work_mode accepts a mode name."""
