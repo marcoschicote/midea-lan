@@ -443,6 +443,43 @@ class TestMideaE1Device:
         message = mock_build_send.call_args.args[0]
         assert message.body == bytearray.fromhex(expected.ljust(76, "0"))
 
+    @pytest.mark.parametrize(
+        ("param", "setting", "byte_index"),
+        [
+            ("wash_region", "wash_region_setting", 4),
+            ("water_level", "water_level_setting", 11),
+            ("water_strong_level", "water_strong_level_setting", 12),
+        ],
+    )
+    def test_wash_param_settings_are_readable_and_sent(
+        self,
+        param: str,
+        setting: str,
+        byte_index: int,
+    ) -> None:
+        """Test wash parameter settings are readable, survive replies, and are sent."""
+        self.device.set_attribute(setting, 5)
+        body = bytearray(42)
+        body[1] = 0x01  # status Cancel
+        body[35] = 3  # reported wash_region
+        self.device.process_message(self._message(MessageType.query, body))
+        assert self.device.attributes[setting] == 5
+        assert self.device.attributes[param] != 5
+        with patch.object(self.device, "build_send") as mock_build_send:
+            self.device.set_attribute(DeviceAttributes.mode.value, "eco_wash")
+        message = mock_build_send.call_args.args[0]
+        assert message.body[byte_index] == 5
+
+    def test_plain_wash_param_write_updates_setting(self) -> None:
+        """Test writing the plain wash parameter name also sets the readable setting."""
+        self.device.set_attribute(DeviceAttributes.wash_region.value, 5)
+        assert self.device.attributes[DeviceAttributes.wash_region_setting.value] == 5
+
+    def test_wash_param_setting_rejects_out_of_range(self) -> None:
+        """Test the setting names keep the byte range check."""
+        with pytest.raises(ValueWrongType):
+            self.device.set_attribute(DeviceAttributes.water_level_setting.value, 256)
+
     def test_additional_setting_is_sent_with_the_start(self) -> None:
         """Test additional_setting rides along with the next start."""
         self.device.set_attribute(DeviceAttributes.additional_setting.value, 2)

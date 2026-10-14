@@ -64,6 +64,9 @@ class DeviceAttributes(StrEnum):
     program = "program"
     door_auto_open_setting = "door_auto_open_setting"
     additional_setting = "additional_setting"
+    wash_region_setting = "wash_region_setting"
+    water_level_setting = "water_level_setting"
+    water_strong_level_setting = "water_strong_level_setting"
     # Sensors (read-only), decoded from the status reply
     operator = "operator"
     wash_region = "wash_region"
@@ -98,14 +101,16 @@ STATUS_START = "start"
 
 # Single-byte wash parameters stored and sent with the next work command.
 MAX_BYTE_VALUE = 0xFF
-_WASH_PARAM_ATTRS = frozenset(
-    {
-        DeviceAttributes.additional,
-        DeviceAttributes.wash_region,
-        DeviceAttributes.water_level,
-        DeviceAttributes.water_strong_level,
-    },
-)
+# Each maps to the readable setting for the next start, kept apart from the
+# value the device reports.
+_WASH_PARAM_SETTINGS = {
+    DeviceAttributes.additional: DeviceAttributes.additional_setting,
+    DeviceAttributes.wash_region: DeviceAttributes.wash_region_setting,
+    DeviceAttributes.water_level: DeviceAttributes.water_level_setting,
+    DeviceAttributes.water_strong_level: DeviceAttributes.water_strong_level_setting,
+}
+_WASH_PARAM_ATTRS = frozenset(_WASH_PARAM_SETTINGS)
+_SETTING_TO_WASH_PARAM = {v: k for k, v in _WASH_PARAM_SETTINGS.items()}
 
 
 class MideaE1Device(MideaDevice):
@@ -152,6 +157,9 @@ class MideaE1Device(MideaDevice):
                 DeviceAttributes.program: None,
                 DeviceAttributes.door_auto_open_setting: False,
                 DeviceAttributes.additional_setting: 0,
+                DeviceAttributes.wash_region_setting: 0,
+                DeviceAttributes.water_level_setting: 0,
+                DeviceAttributes.water_strong_level_setting: 0,
                 DeviceAttributes.operator: None,
                 DeviceAttributes.wash_region: 0,
                 DeviceAttributes.water_level: None,
@@ -529,9 +537,10 @@ class MideaE1Device(MideaDevice):
 
         ``program`` selects a program without starting it; ``status`` work and
         order then use it instead of the reported mode. ``door_auto_open_setting``
-        and ``additional_setting`` are the readable settings for the next start
-        (writing ``door_auto_open`` / ``additional`` sets them too), while
-        ``door_auto_open`` / ``additional`` report what the device last sent.
+        and the ``*_setting`` wash parameters (``additional``, ``wash_region``,
+        ``water_level``, ``water_strong_level``) are the readable settings for the
+        next start (writing the plain names sets them too), while the plain names
+        report what the device last sent.
         """
         if attr == DeviceAttributes.mode:
             self.set_work_mode(
@@ -549,8 +558,8 @@ class MideaE1Device(MideaDevice):
                 raise ValueWrongType(msg)
             self._attributes[DeviceAttributes.program] = self._modes[mode]
             return
-        if attr == DeviceAttributes.additional_setting:
-            attr = DeviceAttributes.additional
+        if attr in _SETTING_TO_WASH_PARAM:
+            attr = _SETTING_TO_WASH_PARAM[DeviceAttributes(attr)]
         elif attr == DeviceAttributes.door_auto_open_setting:
             attr = DeviceAttributes.door_auto_open
         if attr == DeviceAttributes.delay_minutes:
@@ -568,10 +577,10 @@ class MideaE1Device(MideaDevice):
                 attr,
                 number,
             )
-            if attr == DeviceAttributes.additional:
-                self._attributes[DeviceAttributes.additional_setting] = (
-                    self._wash_param_settings[DeviceAttributes.additional]
-                )
+            param = DeviceAttributes(attr)
+            self._attributes[_WASH_PARAM_SETTINGS[param]] = self._wash_param_settings[
+                param
+            ]
             return
 
         if not isinstance(value, bool):
